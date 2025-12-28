@@ -6,8 +6,9 @@
 #include <cstring>
 #include <vector>
 
-// Global flag to control ASM usage (defined in main.cpp)
-extern bool g_useAsm;
+// Global flags to control use of assembly for specific modules (defined in main.cpp)
+extern bool g_sobelAsm; // when true, use ASM implementation for Sobel
+extern bool g_hsvAsm;   // when true, use ASM implementation for HSV batch
 
 // ============================================================================
 // HSV CONVERSION STRUCTURES AND HELPERS
@@ -180,7 +181,8 @@ struct AsciiPixel {
 std::vector<AsciiPixel> convertToAscii(
     const Image& scaledImg,
     const EdgeMap* edges = nullptr,
-    bool useEdges = true
+    bool useEdges = true,
+    bool useHsv = false
 );
 
 // Print ASCII art to console with optional colors
@@ -226,7 +228,10 @@ extern "C" {
 extern int g_threadCount;
 
 // Temporary luminance buffer used by ASM Sobel implementation.
-// Allocated in C++ and filled/read by assembly when `g_useAsm` is enabled.
+// Allocated in C++ and filled/read by assembly when `g_sobelAsm` is enabled.
 extern float* g_lumaBuffer;
+
+// Last measured HSV conversion time (milliseconds) set by convertToAscii
+extern double g_lastHsvMs;
 
 

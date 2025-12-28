@@ -8,6 +8,20 @@
 
 ---
 
+## 🛠️ CLI Options (krótkie podsumowanie)
+
+- `--width <cols>` / `-w`: target ASCII width
+- `--height <rows>` / `-h`: target ASCII height
+- `--edges` / `--no-edges`: enable or disable Sobel edge detection
+- `--colors` / `--no-colors`: enable or disable ANSI 24-bit color output
+- `--hsv` / `--no-hsv`: enable or disable HSV processing
+- `--sobel-asm` / `--no-sobel-asm`: enable/disable ASM Sobel backend
+- `--hsv-asm` / `--no-hsv-asm`: enable/disable ASM HSV backend
+- legacy: `--asm-on` / `--asm-off` map to enabling/disabling both ASM backends
+
+(See `src/main.cpp` for full help text.)
+
+
 ## 🔧 Dostępne Funkcje ASM
 
 ### 1. `_add` - Funkcja Testowa ✅ UŻYWANA
@@ -34,7 +48,7 @@ int result = add(10, 5);  // ASM: x0=10, x1=5 → x0=15
 
 **Toggle:**
 ```cpp
-int armTestResult = g_useAsm ? add(10, 5) : addCpp(10, 5);
+int armTestResult = (g_sobelAsm || g_hsvAsm) ? add(10, 5) : addCpp(10, 5);
 ```
 
 **Cel:** Weryfikacja poprawności linkowania i wykonywania kodu ARM assembly.
@@ -64,7 +78,7 @@ _rgbToHsvBatch:
 ```cpp
 // src/image_converter.cpp, linia 14-26
 PixelHSV rgbToHsv(float r, float g, float b) {
-    if (g_useAsm) {
+    if (g_sobelAsm) {
         float src[3] = {r, g, b};
         float dst[3] = {0.0f, 0.0f, 0.0f};
         rgbToHsvBatch(src, dst, 1);  // ← WYWOŁANIE ASM

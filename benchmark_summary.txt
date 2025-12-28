@@ -1,0 +1,32 @@
+Benchmark summary
+Image: imgs/test4.jpeg
+Test: noasm_edges_colors
+Average Edge_ms: 0.231300 ms
+Average HSV_ms: nan ms
+Average Total_ms: 209.454383 ms
+
+Test: noasm_edges_colors_hsv
+Average Edge_ms: 1.398500 ms
+Average HSV_ms: 0.017229 ms
+Average Total_ms: 212.196438 ms
+
+Test: asm_none
+Average Edge_ms: 0.244600 ms
+Average HSV_ms: nan ms
+Average Total_ms: 209.559304 ms
+
+Test: asm_sobel_only
+Average Edge_ms: 0.234700 ms
+Average HSV_ms: nan ms
+Average Total_ms: 209.670550 ms
+
+Test: asm_hsv_only
+Average Edge_ms: 0.229800 ms
+Average HSV_ms: 0.017346 ms
+Average Total_ms: 211.917017 ms
+
+Test: asm_both
+Average Edge_ms: 0.222300 ms
+Average HSV_ms: 0.017337 ms
+Average Total_ms: 206.037867 ms
+

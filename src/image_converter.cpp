@@ -8,6 +8,8 @@
 
 // Global luminance buffer used by ASM path. Defined here.
 float* g_lumaBuffer = nullptr;
+// last HSV time in milliseconds
+double g_lastHsvMs = std::nan("");
 
 
 // ============================================================================
@@ -16,7 +18,7 @@ float* g_lumaBuffer = nullptr;
 
 PixelHSV rgbToHsv(float r, float g, float b) {
     // Toggle between ASM and C++ implementation
-    if (g_useAsm) {
+    if (g_hsvAsm) {
         // Use assembly batch function for single pixel
         float src[3] = {r, g, b};
         float dst[3] = {0.0f, 0.0f, 0.0f};
@@ -192,7 +194,7 @@ EdgeMap detectEdgesSobel(const Image& img, int blockSize) {
         return edges;
     }
 
-    if (g_useAsm) {
+    if (g_sobelAsm) {
         // Use assembly accelerated Sobel to compute Gx and Gy, then derive magnitudes/angles
         int w = img.width;
         int h = img.height;
@@ -215,9 +217,6 @@ EdgeMap detectEdgesSobel(const Image& img, int blockSize) {
 
         if (threadCount == 1) {
             // Single worker: compute whole image
-            fprintf(stderr, "[DEBUG] Calling sobelGradients single-threaded\n");
-            fprintf(stderr, "[DEBUG] img.data=%p w=%d h=%d channels=%d gx=%p gy=%p g_lumaBuffer=%p\n",
-                    static_cast<const void*>(img.data), w, h, img.channels, static_cast<void*>(gx), static_cast<void*>(gy), static_cast<void*>(g_lumaBuffer));
             sobelGradients(img.data, w, h, img.channels, 0, h, gx, gy, g_lumaBuffer);
         } else {
             // Partition inner rows [1, h-1) across threads (edges remain 0)
@@ -235,9 +234,6 @@ EdgeMap detectEdgesSobel(const Image& img, int blockSize) {
                     if (e > innerEnd) e = innerEnd;
                     // Launch worker computing rows [s, e)
                     workers.emplace_back([&img, s, e, gx, gy, w, h]() {
-                        fprintf(stderr, "[DEBUG] Thread worker calling sobelGradients\n");
-                        fprintf(stderr, "[DEBUG] img.data=%p w=%d h=%d channels=%d s=%d e=%d gx=%p gy=%p g_lumaBuffer=%p\n",
-                                static_cast<const void*>(img.data), w, h, img.channels, s, e, static_cast<void*>(gx), static_cast<void*>(gy), static_cast<void*>(g_lumaBuffer));
                         sobelGradients(img.data, w, h, img.channels, s, e, gx, gy, g_lumaBuffer);
                     });
                 }
@@ -310,7 +306,8 @@ EdgeMap detectEdgesSobel(const Image& img, int blockSize) {
 std::vector<AsciiPixel> convertToAscii(
     const Image& scaledImg,
     const EdgeMap* edges,
-    bool useEdges
+    bool useEdges,
+    bool useHsv
 ) {
     std::vector<AsciiPixel> ascii;
 
@@ -320,34 +317,79 @@ std::vector<AsciiPixel> convertToAscii(
 
     ascii.reserve(scaledImg.width * scaledImg.height);
 
+    const int totalPixels = scaledImg.width * scaledImg.height;
+
+    // If HSV path requested, run batch conversion (uses ASM batch if g_useAsm)
+    std::vector<float> hsvDst;
+    if (useHsv) {
+        hsvDst.resize(static_cast<size_t>(totalPixels) * 3);
+        std::vector<float> src;
+        src.reserve(static_cast<size_t>(totalPixels) * 3);
+        for (int y = 0; y < scaledImg.height; ++y) {
+            for (int x = 0; x < scaledImg.width; ++x) {
+                int idx = (y * scaledImg.width + x) * scaledImg.channels;
+                float rf = scaledImg.data[idx] / 255.0f;
+                float gf = (scaledImg.channels > 1) ? (scaledImg.data[idx + 1] / 255.0f) : rf;
+                float bf = (scaledImg.channels > 2) ? (scaledImg.data[idx + 2] / 255.0f) : rf;
+                src.push_back(rf);
+                src.push_back(gf);
+                src.push_back(bf);
+            }
+        }
+
+        // Call batch HSV converter (assembly-accelerated when enabled)
+        auto hsvStart = std::chrono::high_resolution_clock::now();
+        rgbToHsvBatch(src.data(), hsvDst.data(), totalPixels);
+        auto hsvEnd = std::chrono::high_resolution_clock::now();
+        auto hsvMs = std::chrono::duration_cast<std::chrono::duration<double, std::milli>>(hsvEnd - hsvStart).count();
+        g_lastHsvMs = hsvMs;
+    }
+
+    if (!useHsv) {
+        g_lastHsvMs = std::nan("");
+    }
+
     for (int y = 0; y < scaledImg.height; ++y) {
         for (int x = 0; x < scaledImg.width; ++x) {
-            // Get pixel color
             int idx = (y * scaledImg.width + x) * scaledImg.channels;
             unsigned char r = scaledImg.data[idx];
             unsigned char g = (scaledImg.channels > 1) ? scaledImg.data[idx + 1] : r;
             unsigned char b = (scaledImg.channels > 2) ? scaledImg.data[idx + 2] : r;
 
             float luminance = getLuminance(scaledImg, x, y);
-
             // Apply gamma correction for better contrast
             luminance = std::pow(luminance, 0.8f);
-
             // Clamp to [0, 1]
             luminance = std::max(0.0f, std::min(1.0f, luminance));
 
-            // Get character based on brightness using detailed character set
             int level = static_cast<int>(luminance * (AsciiCharMap::densityLevels - 1));
             level = std::max(0, std::min(AsciiCharMap::densityLevels - 1, level));
 
             char ch = AsciiCharMap::densityChars[level];
 
+            // If HSV mode enabled, optionally override based on hue ranges
+            if (useHsv) {
+                int p = (y * scaledImg.width + x);
+                float h = hsvDst[p * 3 + 0];
+                float s = hsvDst[p * 3 + 1];
+                float v = hsvDst[p * 3 + 2];
+                // Use value from HSV as brightness instead
+                float hvLum = std::max(0.0f, std::min(1.0f, v));
+                int hvLevel = static_cast<int>(hvLum * (AsciiCharMap::densityLevels - 1));
+                hvLevel = std::max(0, std::min(AsciiCharMap::densityLevels - 1, hvLevel));
+                ch = AsciiCharMap::densityChars[hvLevel];
+
+                // Example hue-based filtering: make blue hues prominent
+                if (s > 0.15f && (h >= 180.0f && h <= 260.0f)) {
+                    ch = '#';
+                }
+            }
+
             // Override with edge character if applicable
             if (useEdges && edges && edges->isValid()) {
                 EdgeInfo edge = edges->getEdgeAt(x, y);
-                // Higher threshold to reduce noise on uniform areas
                 if (edge.magnitude > 0.25f) {
-                    ch = AsciiCharMap::getEdgeChar(edge.angle);
+                    ch = AsciiCharMap::getEdgeChar(edge.angle); 
                 }
             }
 
