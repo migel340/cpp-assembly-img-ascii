@@ -8,8 +8,11 @@ extern "C" {
     int add(int a, int b);
 }
 
-// Global flag to control ASM usage
-bool g_useAsm = true;
+// Global flag to control ASM usage. Default is OFF; runtime flags control usage.
+bool g_useAsm = false;
+
+// Global thread count for processing (0 = auto). Clamped to [1,64] when used.
+int g_threadCount = 0;
 
 // C++ implementation of add function
 int addCpp(int a, int b) {
@@ -81,6 +84,13 @@ int main(int argc, char* argv[]) {
             g_useAsm = true;
         } else if (arg == "--asm-off") {
             g_useAsm = false;
+        } else if (arg == "--threads" && i + 1 < argc) {
+            try {
+                g_threadCount = std::stoi(argv[++i]);
+                if (g_threadCount < 0) g_threadCount = 0;
+            } catch (...) {
+                g_threadCount = 0;
+            }
         }
     }
 

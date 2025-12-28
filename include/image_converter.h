@@ -206,15 +206,27 @@ extern "C" {
     // Computes gradients for interior pixels (borders set to 0)
     // imageData: pointer to image buffer (RGB, 3 bytes per pixel)
     // width, height: image dimensions
+    // startY, endY: region of rows [startY, endY) to compute (interior rows only)
+    // stride: bytes per pixel (channels)
     // outputGx, outputGy: output arrays for gradients
     void sobelGradients(
         const unsigned char* imageData,
         int width,
         int height,
-        int stride,  // bytes per pixel
+        int stride,  // bytes per pixel (channels)
+        int startY,
+        int endY,
         float* outputGx,
-        float* outputGy
+        float* outputGy,
+        float* lumaBuffer // optional preallocated luminance buffer (can be null)
     );
 }
+
+// Global thread count (0 = auto/hardware_concurrency), clamped to [1,64]
+extern int g_threadCount;
+
+// Temporary luminance buffer used by ASM Sobel implementation.
+// Allocated in C++ and filled/read by assembly when `g_useAsm` is enabled.
+extern float* g_lumaBuffer;
 
 

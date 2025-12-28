@@ -6,6 +6,9 @@
 #include <cmath>
 #include <algorithm>
 
+// Global luminance buffer used by ASM path. Defined here.
+float* g_lumaBuffer = nullptr;
+
 
 // ============================================================================
 // HSV CONVERSION IMPLEMENTATION
@@ -186,6 +189,95 @@ EdgeMap detectEdgesSobel(const Image& img, int blockSize) {
     EdgeMap edges(img.width, img.height);
 
     if (!img.isValid()) {
+        return edges;
+    }
+
+    if (g_useAsm) {
+        // Use assembly accelerated Sobel to compute Gx and Gy, then derive magnitudes/angles
+        int w = img.width;
+        int h = img.height;
+        size_t total = static_cast<size_t>(w) * static_cast<size_t>(h);
+        float* gx = new float[total]();
+        float* gy = new float[total]();
+
+        // Ensure luminance buffer exists for ASM implementation to use
+        if (!g_lumaBuffer) {
+            g_lumaBuffer = new float[total]();
+        }
+
+        // Determine thread count (0 = auto)
+        int threadCount = g_threadCount;
+        if (threadCount <= 0) {
+            threadCount = static_cast<int>(std::thread::hardware_concurrency());
+            if (threadCount <= 0) threadCount = 1;
+        }
+        if (threadCount > 64) threadCount = 64;
+
+        if (threadCount == 1) {
+            // Single worker: compute whole image
+            fprintf(stderr, "[DEBUG] Calling sobelGradients single-threaded\n");
+            fprintf(stderr, "[DEBUG] img.data=%p w=%d h=%d channels=%d gx=%p gy=%p g_lumaBuffer=%p\n",
+                    static_cast<const void*>(img.data), w, h, img.channels, static_cast<void*>(gx), static_cast<void*>(gy), static_cast<void*>(g_lumaBuffer));
+            sobelGradients(img.data, w, h, img.channels, 0, h, gx, gy, g_lumaBuffer);
+        } else {
+            // Partition inner rows [1, h-1) across threads (edges remain 0)
+            int innerStart = 1;
+            int innerEnd = std::max(1, h - 1);
+            int rows = innerEnd - innerStart;
+            if (rows > 0) {
+                int block = (rows + threadCount - 1) / threadCount;
+                std::vector<std::thread> workers;
+                workers.reserve(threadCount);
+                for (int t = 0; t < threadCount; ++t) {
+                    int s = innerStart + t * block;
+                    int e = s + block;
+                    if (s >= innerEnd) break;
+                    if (e > innerEnd) e = innerEnd;
+                    // Launch worker computing rows [s, e)
+                    workers.emplace_back([&img, s, e, gx, gy, w, h]() {
+                        fprintf(stderr, "[DEBUG] Thread worker calling sobelGradients\n");
+                        fprintf(stderr, "[DEBUG] img.data=%p w=%d h=%d channels=%d s=%d e=%d gx=%p gy=%p g_lumaBuffer=%p\n",
+                                static_cast<const void*>(img.data), w, h, img.channels, s, e, static_cast<void*>(gx), static_cast<void*>(gy), static_cast<void*>(g_lumaBuffer));
+                        sobelGradients(img.data, w, h, img.channels, s, e, gx, gy, g_lumaBuffer);
+                    });
+                }
+                for (auto& th : workers) th.join();
+            }
+        }
+
+        // Compute magnitudes and angles, track max gradient
+        float maxGradient = 0.0f;
+        for (int y = 1; y < h - 1; ++y) {
+            for (int x = 1; x < w - 1; ++x) {
+                int idx = y * w + x;
+                float vx = gx[idx];
+                float vy = gy[idx];
+                float magnitude = std::sqrt(vx * vx + vy * vy);
+                float angle = std::atan2(vy, vx) * 180.0f / M_PI;
+                if (angle < 0) angle += 180.0f;
+                edges.magnitudes[idx] = magnitude;
+                edges.angles[idx] = angle;
+                maxGradient = std::max(maxGradient, magnitude);
+            }
+        }
+
+        // Normalize magnitudes
+        if (maxGradient > 0.0f) {
+            for (int y = 1; y < h - 1; ++y) {
+                for (int x = 1; x < w - 1; ++x) {
+                    int idx = y * w + x;
+                    edges.magnitudes[idx] /= maxGradient;
+                }
+            }
+        }
+
+        delete[] gx;
+        delete[] gy;
+        // free luminance buffer
+        if (g_lumaBuffer) {
+            delete[] g_lumaBuffer;
+            g_lumaBuffer = nullptr;
+        }
         return edges;
     }
 
